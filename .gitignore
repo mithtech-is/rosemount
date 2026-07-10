@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+
+# --- Node / Vite (dashboard-ui) ---
+node_modules/
+dashboard-ui/node_modules/
+dashboard-ui/dist/
+.vite/
+
+# --- Local-only UI fallbacks & backups (not part of the product) ---
+dashboard-ui/src-original/
+rosemount_dashboard/public/rmdash-original/
+rosemount_dashboard/public/rmdash-polished/
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# --- Misc ---
+*.log

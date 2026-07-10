@@ -1,0 +1,7 @@
+{% extends "templates/base.html" %}
+{% block title %}Rosemount HQ Dashboard{% endblock %}
+{% block navbar %}{% endblock %}
+{% block footer %}{% endblock %}
+{% block style %}<link rel="stylesheet" href="/assets/rosemount_dashboard/rmdash/assets/app.css">{% endblock %}
+{% block content %}<div id="root"></div>{% endblock %}
+{% block script %}<script>window.csrf_token = "{{ csrf_token }}";</script><script type="module" src="/assets/rosemount_dashboard/rmdash/assets/app.js"></script>{% endblock %}
