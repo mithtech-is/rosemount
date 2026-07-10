@@ -130,10 +130,16 @@ _HSN = None
 
 
 def _an_hsn():
-    """A valid HSN/SAC code (india_compliance makes it mandatory on Items)."""
+    """A valid HSN/SAC code (india_compliance makes it mandatory on Items).
+
+    Returns None when the GST HSN Code doctype isn't installed (e.g. a
+    preschool site without india_compliance) so item creation can skip it.
+    """
     global _HSN
     if _HSN:
         return _HSN
+    if not frappe.db.exists("DocType", "GST HSN Code"):
+        return None
     for code in ("999293", "999294", "999900"):  # 999293 = education/coaching services
         if frappe.db.exists("GST HSN Code", code):
             _HSN = code
@@ -145,11 +151,15 @@ def _an_hsn():
 
 def _ensure_item(code, group, uom):
     if not frappe.db.exists("Item", code):
-        frappe.get_doc({
+        doc = {
             "doctype": "Item", "item_code": code, "item_name": code,
-            "item_group": group, "stock_uom": uom, "gst_hsn_code": _an_hsn(),
+            "item_group": group, "stock_uom": uom,
             "is_stock_item": 0, "is_sales_item": 1, "is_purchase_item": 0,
-        }).insert(ignore_permissions=True)
+        }
+        hsn = _an_hsn()
+        if hsn:
+            doc["gst_hsn_code"] = hsn
+        frappe.get_doc(doc).insert(ignore_permissions=True)
 
 
 def _ensure_customer(name, cgroup, territory):
@@ -165,12 +175,19 @@ def _ensure_customer(name, cgroup, territory):
 # steps
 # =============================================================================
 def _seed_fiscal_year():
-    if not frappe.db.exists("Fiscal Year", "2026-2027"):
-        frappe.get_doc({
-            "doctype": "Fiscal Year", "year": "2026-2027",
-            "year_start_date": "2026-04-01", "year_end_date": "2027-03-31",
-        }).insert(ignore_permissions=True)
-        _log("Fiscal Year 2026-2027 created")
+    # Fee rows post across Jan–Jun 2026, which span TWO Indian fiscal years
+    # (2025-26 = Apr 2025–Mar 2026, 2026-27 = Apr 2026–Mar 2027). Both must
+    # exist or Sales Invoices with Jan–Mar 2026 posting dates fail.
+    for yr, start, end in (
+        ("2025-2026", "2025-04-01", "2026-03-31"),
+        ("2026-2027", "2026-04-01", "2027-03-31"),
+    ):
+        if not frappe.db.exists("Fiscal Year", yr):
+            frappe.get_doc({
+                "doctype": "Fiscal Year", "year": yr,
+                "year_start_date": start, "year_end_date": end,
+            }).insert(ignore_permissions=True)
+            _log("Fiscal Year %s created" % yr)
 
 
 def _seed_academic_year():
