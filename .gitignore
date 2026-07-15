@@ -12,9 +12,10 @@ dashboard-ui/dist/
 .vite/
 
 # --- Local-only UI fallbacks & backups (not part of the product) ---
+# Saved UI versions are `rmdash-<name>/` snapshots used by ops/rmdash-ui.sh.
+# Only the live bundle (public/rmdash/) is tracked.
 dashboard-ui/src-original/
-rosemount_dashboard/public/rmdash-original/
-rosemount_dashboard/public/rmdash-polished/
+rosemount_dashboard/public/rmdash-*/
 
 # --- Editor / OS ---
 .DS_Store
