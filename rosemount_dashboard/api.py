@@ -462,12 +462,15 @@ def staff_list(branch=None):
         rows = frappe.get_all(
             "Employee", filters=branch_filter(branch, "Employee"),
             # employee_number holds the SchoolBridge username (user_id is a strict Link->User).
-            fields=["employee_name", "branch", "designation", "employee_number",
+            fields=["name", "employee_name", "branch", "designation", "employee_number",
                     "user_id", "cell_number", "status"],
             order_by="employee_name", limit=200,
         )
+        # NOTE: the Employee id is appended LAST so existing column indices (0-5)
+        # stay stable for the table; the profile drawer reads row[6].
         return [[r.employee_name, r.branch or "", r.designation or "",
-                 r.employee_number or r.user_id or "", r.cell_number or "", r.status]
+                 r.employee_number or r.user_id or "", r.cell_number or "", r.status,
+                 r.name]
                 for r in rows]
 
     return _cached(_cache_key("staff_list", branch), build)
@@ -696,6 +699,267 @@ def settings_info():
         }
 
     return _cached(_cache_key("settings_info"), build)
+
+
+# =============================================================================
+# Phase 1 — profiles, ledgers, calendar, student attendance
+# =============================================================================
+@frappe.whitelist()
+def student_profile(student):
+    """Everything the Students drawer shows: identity, guardians, enrolment,
+    fee position and attendance rate."""
+    _require_hq()
+
+    def build():
+        s = frappe.db.get_value(
+            "Student", student,
+            ["name", "student_name", "student_email_id", "student_mobile_number",
+             "joining_date", "date_of_birth", "gender", "enabled"],
+            as_dict=True,
+        )
+        if not s:
+            frappe.throw("Student not found")
+        s["branch"] = frappe.db.get_value("Student", student, "custom_branch") \
+            if _has_field("Student", "custom_branch") else ""
+
+        enr = frappe.get_all(
+            "Program Enrollment", filters={"student": student, "docstatus": 1},
+            fields=["name", "program", "academic_year", "enrollment_date"],
+            order_by="enrollment_date desc",
+        )
+        guardians = frappe.get_all(
+            "Student Guardian", filters={"parent": student},
+            fields=["guardian", "guardian_name", "relation"],
+        )
+        for g in guardians:
+            g["mobile"] = frappe.db.get_value("Guardian", g.guardian, "mobile_number") or ""
+            g["email"] = frappe.db.get_value("Guardian", g.guardian, "email_address") or ""
+
+        # fee position from submitted invoices
+        inv = frappe.get_all(
+            "Sales Invoice", filters={"student": student, "docstatus": 1},
+            fields=["grand_total", "outstanding_amount"],
+        ) if _has_field("Sales Invoice", "student") else []
+        total = sum(flt(i.grand_total) for i in inv)
+        pending = sum(flt(i.outstanding_amount) for i in inv)
+
+        # attendance rate
+        att = frappe.get_all("Student Attendance",
+                             filters={"student": student, "docstatus": 1},
+                             fields=["status"])
+        present = len([a for a in att if a.status in ("Present", "Half Day")])
+        rate = round((present / len(att)) * 100) if att else None
+
+        return {
+            "student": s,
+            "enrollment": enr[0] if enr else None,
+            "enrollmentHistory": enr,
+            "guardians": guardians,
+            "fees": {"total": total, "collected": total - pending, "pending": pending},
+            "attendance": {"present": present, "total": len(att), "rate": rate},
+        }
+
+    return _cached(_cache_key("student_profile", None, student), build)
+
+
+@frappe.whitelist()
+def fee_ledger(student):
+    """Per-student invoice + payment history for the fees drawer."""
+    _require_hq()
+
+    def build():
+        if not _has_field("Sales Invoice", "student"):
+            return {"invoices": [], "payments": []}
+        invoices = frappe.get_all(
+            "Sales Invoice", filters={"student": student, "docstatus": 1},
+            fields=["name", "posting_date", "grand_total", "outstanding_amount", "status"],
+            order_by="posting_date desc",
+        )
+        rows = [[
+            i.name, formatdate(i.posting_date, "d MMM yyyy"), flt(i.grand_total),
+            flt(i.grand_total) - flt(i.outstanding_amount), flt(i.outstanding_amount),
+            "Paid" if flt(i.outstanding_amount) <= 0 else
+            ("Partial" if flt(i.outstanding_amount) < flt(i.grand_total) else "Unpaid"),
+        ] for i in invoices]
+
+        payments = []
+        names = [i.name for i in invoices]
+        if names:
+            per = frappe.get_all(
+                "Payment Entry Reference",
+                filters=[["reference_name", "in", names], ["docstatus", "=", 1]],
+                fields=["parent", "reference_name", "allocated_amount"],
+            )
+            for p in per:
+                pe = frappe.db.get_value("Payment Entry", p.parent,
+                                         ["posting_date", "mode_of_payment"], as_dict=True) or {}
+                payments.append([
+                    p.parent,
+                    formatdate(pe.get("posting_date"), "d MMM yyyy") if pe.get("posting_date") else "",
+                    pe.get("mode_of_payment") or "—",
+                    p.reference_name, flt(p.allocated_amount),
+                ])
+        return {"invoices": rows, "payments": payments}
+
+    return _cached(_cache_key("fee_ledger", None, student), build)
+
+
+@frappe.whitelist()
+def staff_profile(employee):
+    """Employee detail for the Staff drawer."""
+    _require_hq()
+
+    def build():
+        e = frappe.db.get_value(
+            "Employee", employee,
+            ["name", "employee_name", "designation", "department", "branch", "status",
+             "date_of_joining", "cell_number", "personal_email", "company_email",
+             "employee_number", "gender"],
+            as_dict=True,
+        )
+        if not e:
+            frappe.throw("Employee not found")
+        att = frappe.get_all("Attendance",
+                             filters={"employee": employee, "docstatus": 1},
+                             fields=["status"])
+        present = len([a for a in att if a.status in ("Present", "Work From Home", "Half Day")])
+        e["attendanceRate"] = round((present / len(att)) * 100) if att else None
+        e["leaves"] = frappe.db.count("Leave Application",
+                                      {"employee": employee, "docstatus": 1})
+        return e
+
+    return _cached(_cache_key("staff_profile", None, employee), build)
+
+
+@frappe.whitelist()
+def upcoming_events(limit=8):
+    """Next entries from the company's annual calendar (Holiday List)."""
+    _require_hq()
+    limit = int(limit)
+
+    def build():
+        hl = frappe.db.get_value("Company", _default_company(), "default_holiday_list")
+        if not hl:
+            hl = frappe.db.get_value("Holiday List", {}, "name")
+        if not hl:
+            return []
+        rows = frappe.get_all(
+            "Holiday", filters=[["parent", "=", hl], ["holiday_date", ">=", nowdate()]],
+            fields=["holiday_date", "description", "weekly_off"],
+            order_by="holiday_date asc", limit=limit,
+        )
+        out = []
+        for r in rows:
+            desc = frappe.utils.strip_html(r.description or "").strip()
+            # anything that isn't a public holiday reads as a school event
+            kind = "HOLIDAY" if not _is_event(desc) else "EVENT"
+            out.append([kind, desc, formatdate(r.holiday_date, "d MMM yyyy"), str(r.holiday_date)])
+        return out
+
+    return _cached(_cache_key("upcoming_events", None, str(limit)), build)
+
+
+def _is_event(desc):
+    d = (desc or "").lower()
+    return any(k in d for k in ("day function", "sports", "meeting", "ptm", "annual day", "exam"))
+
+
+def _default_company():
+    return frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
+
+
+@frappe.whitelist()
+def student_attendance_today(branch=None):
+    """Student (not staff) attendance for the most recent marked day."""
+    _require_hq()
+
+    def build():
+        last = frappe.db.sql(
+            "SELECT MAX(`date`) FROM `tabStudent Attendance` WHERE docstatus = 1")
+        day = last[0][0] if last and last[0] else None
+        if not day:
+            return {"present": 0, "absent": 0, "total": 0, "rate": 0, "date": None}
+        rows = frappe.get_all("Student Attendance",
+                              filters={"date": day, "docstatus": 1},
+                              fields=["student", "status"])
+        if branch and _has_field("Student", "custom_branch"):
+            allowed = {s.name for s in frappe.get_all(
+                "Student", filters={"custom_branch": branch}, fields=["name"])}
+            rows = [r for r in rows if r.student in allowed]
+        present = len([r for r in rows if r.status in ("Present", "Half Day")])
+        total = len(rows)
+        return {
+            "present": present, "absent": total - present, "total": total,
+            "rate": round((present / total) * 100) if total else 0,
+            "date": formatdate(day, "d MMM yyyy"),
+        }
+
+    return _cached(_cache_key("student_attendance_today", branch), build)
+
+
+@frappe.whitelist()
+def student_attendance_rows(branch=None, date=None, limit=200):
+    """Attendance register: one row per student for a given day (default latest)."""
+    _require_hq()
+    limit = int(limit)
+
+    def build():
+        day = date
+        if not day:
+            last = frappe.db.sql(
+                "SELECT MAX(`date`) FROM `tabStudent Attendance` WHERE docstatus = 1")
+            day = last[0][0] if last and last[0] else None
+        if not day:
+            return {"date": None, "rows": []}
+        rows = frappe.get_all(
+            "Student Attendance", filters={"date": day, "docstatus": 1},
+            fields=["student", "student_name", "student_group", "status"],
+            order_by="student_name", limit=limit,
+        )
+        out = []
+        for r in rows:
+            br = frappe.db.get_value("Student", r.student, "custom_branch") \
+                if _has_field("Student", "custom_branch") else ""
+            if branch and br != branch:
+                continue
+            out.append([r.student, r.student_name, br or "",
+                        (r.student_group or "").replace(" 2026-2027", ""), r.status])
+        return {"date": formatdate(day, "d MMM yyyy"), "rows": out}
+
+    return _cached(_cache_key("student_attendance_rows", branch, str(date or "latest")), build)
+
+
+@frappe.whitelist()
+def attendance_trend(branch=None, days=10):
+    """Daily student attendance rate for the last N marked school days."""
+    _require_hq()
+    days = int(days)
+
+    def build():
+        marked = frappe.db.sql(
+            "SELECT DISTINCT `date` FROM `tabStudent Attendance` "
+            "WHERE docstatus = 1 ORDER BY `date` DESC LIMIT %s", (days,))
+        out = []
+        allowed = None
+        if branch and _has_field("Student", "custom_branch"):
+            allowed = {s.name for s in frappe.get_all(
+                "Student", filters={"custom_branch": branch}, fields=["name"])}
+        for (day,) in reversed(marked or []):
+            rows = frappe.get_all("Student Attendance",
+                                  filters={"date": day, "docstatus": 1},
+                                  fields=["student", "status"])
+            if allowed is not None:
+                rows = [r for r in rows if r.student in allowed]
+            total = len(rows)
+            present = len([r for r in rows if r.status in ("Present", "Half Day")])
+            out.append({
+                "d": formatdate(day, "d MMM"),
+                "rate": round((present / total) * 100) if total else 0,
+                "present": present, "absent": total - present,
+            })
+        return out
+
+    return _cached(_cache_key("attendance_trend", branch, str(days)), build)
 
 
 # =============================================================================

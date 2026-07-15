@@ -20,7 +20,8 @@ export default function App() {
       const [summary, feeOverview, feeByBranch, feeTrend, funnel, kitOrders, attendance,
              branches, staff, students, feeRows, inventory, invoices, billing, curriculum, reports, settings,
              academicYears, programs, holidayLists, feeStructures, receipts, outstanding, enquiry, kitOrderList,
-             hrEmployees, leaveApps, salarySlips, departments, courses, topics, hqUsers] =
+             hrEmployees, leaveApps, salarySlips, departments, courses, topics, hqUsers,
+             events, stuAttendance, attTrend, attRows] =
         await Promise.all([
           api.summary(b), api.feeOverview(b), api.feeByBranch(), api.feeTrend(b),
           api.funnel(b), api.kitOrders(b), api.attendance(b), api.branches(),
@@ -31,11 +32,14 @@ export default function App() {
           api.kitOrderList(b),
           api.hrEmployees(b), api.leaveApplications(b), api.salarySlips(), api.departmentsList(),
           api.coursesList(), api.topicsList(), api.hqUsers(),
+          api.upcomingEvents(), api.studentAttendanceToday(b), api.attendanceTrend(b),
+          api.studentAttendanceRows(b),
         ]);
       setD({ summary, feeOverview, feeByBranch, feeTrend, funnel, kitOrders, attendance,
              branches, staff, students, feeRows, inventory, invoices, billing, curriculum, reports, settings,
              academicYears, programs, holidayLists, feeStructures, receipts, outstanding, enquiry, kitOrderList,
-             hrEmployees, leaveApps, salarySlips, departments, courses, topics, hqUsers });
+             hrEmployees, leaveApps, salarySlips, departments, courses, topics, hqUsers,
+             events, stuAttendance, attTrend, attRows });
       setBranchNames(branches.map((r) => String(r[1])));
     } catch (e: any) {
       if (e?.message !== "auth") setErr("Could not load dashboard data: " + (e?.message || e));

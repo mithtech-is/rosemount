@@ -17,13 +17,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   C, PageHead, BrandBtn, Field, FilterSelect, FilterBar, StatusBadge, Placeholder, DataTable,
+  Drawer, DetailRow, DetailSection,
 } from "@/lib/ui";
 import { api, compact, inr, stripRmips } from "@/lib/api";
 import { useTable, downloadCsv } from "@/lib/table";
 import { AddButton, EditAction, DeleteAction, ViewAction, PaymentAction, toast } from "@/lib/forms";
 import type { FieldDef } from "@/lib/forms";
 import { NOTICES, QUICK, CLASSES, SMS_MATRIX } from "@/lib/static";
-import type { Row, Summary, FeeOverview, Funnel, Attendance } from "@/lib/api";
+import type { Row, Summary, FeeOverview, Funnel, Attendance, StudentAttendanceToday, StudentProfile } from "@/lib/api";
 
 export interface Ctx {
   branch: string;
@@ -41,6 +42,11 @@ export interface Ctx {
     enquiry?: Row[]; kitOrderList?: Row[];
     hrEmployees?: Row[]; leaveApps?: Row[]; salarySlips?: Row[]; departments?: Row[];
     courses?: Row[]; topics?: Row[]; hqUsers?: Row[];
+    // Phase 1
+    events?: Row[];
+    stuAttendance?: StudentAttendanceToday;
+    attTrend?: { d: string; rate: number; present: number; absent: number }[];
+    attRows?: { date: string | null; rows: Row[] };
   };
 }
 
@@ -101,6 +107,7 @@ function Dashboard({ d }: Ctx) {
   ];
   const pct = f && f.total ? Math.round((f.collected / f.total) * 100) : 0;
   const funnel = d.funnel;
+  const att = d.stuAttendance;
   const enquiry = [
     { name: "Converted", value: funnel?.converted ?? 0, color: C.blue },
     { name: "Dropped", value: funnel?.dropped ?? 0, color: C.red },
@@ -198,14 +205,68 @@ function Dashboard({ d }: Ctx) {
           </Table>
         </Card>
         <Card className="p-5 rounded-2xl">
-          <h3 className="m-0 mb-3 text-[15.5px] font-bold">Notice Board</h3>
-          {NOTICES.map(([t, ti, dt, col]) => (
-            <div key={ti} className="flex gap-3 p-3 rounded-xl mb-2.5" style={{ background: "#f8fafd" }}>
-              <span className="w-1 rounded" style={{ background: col }} />
-              <div><div className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: col }}>{t}</div>
-                <div className="text-[13.5px] font-semibold mt-px">{ti}</div><div className="text-[11.5px] mt-px" style={{ color: C.mute }}>{dt}</div></div>
+          <div className="flex items-baseline justify-between mb-3">
+            <h3 className="m-0 text-[15.5px] font-bold">Upcoming</h3>
+            <span className="text-[11px]" style={{ color: C.mute }}>annual calendar</span>
+          </div>
+          {(d.events || []).length === 0 && (
+            <div className="text-[12.5px] py-6 text-center" style={{ color: C.mute }}>
+              No upcoming events on the calendar.
             </div>
-          ))}
+          )}
+          {(d.events || []).slice(0, 5).map((e, i) => {
+            const kind = String(e[0]);
+            const col = kind === "EVENT" ? C.blue : C.amber;
+            return (
+              <div key={i} className="rm-notice flex gap-3 p-3 rounded-xl mb-2.5" style={{ background: "#f8fafd" }}>
+                <span className="w-1 rounded" style={{ background: col }} />
+                <div className="min-w-0">
+                  <div className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: col }}>{kind}</div>
+                  <div className="text-[13.5px] font-semibold mt-px truncate">{String(e[1])}</div>
+                  <div className="text-[11.5px] mt-px" style={{ color: C.mute }}>{String(e[2])}</div>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      </div>
+
+      {/* ---- Student attendance (Phase 1) ---- */}
+      <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: "1fr 2fr" }}>
+        <Card className="p-5 rounded-2xl">
+          <h3 className="m-0 mb-1 text-[15.5px] font-bold">Student Attendance</h3>
+          <div className="text-[11.5px] mb-4" style={{ color: C.mute }}>
+            {att?.date ? `latest register · ${att.date}` : "no register marked yet"}
+          </div>
+          <div className="flex items-end gap-2">
+            <div className="text-[34px] font-extrabold leading-none rm-num" style={{ color: C.blue }}>
+              {att?.rate ?? 0}<span className="text-[18px]">%</span>
+            </div>
+            <div className="text-[11.5px] pb-1.5" style={{ color: C.mute }}>present</div>
+          </div>
+          <div className="mt-4 h-2 rounded-full overflow-hidden" style={{ background: "#eef1f7" }}>
+            <div className="h-full rounded-full" style={{ width: `${att?.rate ?? 0}%`, background: C.blue }} />
+          </div>
+          <div className="flex gap-5 mt-4">
+            <div><div className="text-[17px] font-extrabold rm-num" style={{ color: C.green }}>{att?.present ?? 0}</div>
+              <div className="text-[11px]" style={{ color: C.mute }}>Present</div></div>
+            <div><div className="text-[17px] font-extrabold rm-num" style={{ color: C.red }}>{att?.absent ?? 0}</div>
+              <div className="text-[11px]" style={{ color: C.mute }}>Absent</div></div>
+            <div className="ml-auto text-right"><div className="text-[17px] font-extrabold rm-num">{att?.total ?? 0}</div>
+              <div className="text-[11px]" style={{ color: C.mute }}>Students</div></div>
+          </div>
+        </Card>
+        <Card className="p-5 rounded-2xl">
+          <h3 className="m-0 mb-3.5 text-[15.5px] font-bold">Attendance Trend — last 10 school days</h3>
+          <ResponsiveContainer width="100%" height={168}>
+            <LineChart data={d.attTrend || []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eef1f7" vertical={false} />
+              <XAxis dataKey="d" tick={{ fontSize: 11, fill: C.mute }} axisLine={false} tickLine={false} />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: C.mute }} axisLine={false} tickLine={false} unit="%" />
+              <Tooltip formatter={(v: any) => [`${v}%`, "Present"]} />
+              <Line type="monotone" dataKey="rate" stroke={C.blue} strokeWidth={3} dot={{ r: 3 }} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
         </Card>
       </div>
     </div>
@@ -257,7 +318,59 @@ function Branches({ d, reload }: Ctx) {
 }
 
 /* ===================== STAFF ===================== */
+/* Staff profile drawer (Phase 1) */
+function StaffProfileDrawer({ id, onClose }: { id: string | null; onClose: () => void }) {
+  const [e, setE] = useState<Record<string, any> | null>(null);
+  const [err, setErr] = useState("");
+  React.useEffect(() => {
+    if (!id) { setE(null); setErr(""); return; }
+    let alive = true;
+    setE(null); setErr("");
+    api.staffProfile(id)
+      .then((r) => alive && setE(r))
+      .catch((x) => alive && setErr(x?.message || "Could not load profile"));
+    return () => { alive = false; };
+  }, [id]);
+  return (
+    <Drawer open={!!id} onClose={onClose}
+      title={e?.employee_name || "Staff member"}
+      subtitle={e ? `${e.designation || "—"} · ${stripRmips(e.branch || "")}` : id || ""}>
+      {err && <div className="p-3 rounded-lg text-[13px]" style={{ background: C.redSoft, color: C.red }}>{err}</div>}
+      {!e && !err && <div className="space-y-3">{Array.from({ length: 7 }).map((_, i) => <div key={i} className="rm-skel h-4 w-full" />)}</div>}
+      {e && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="rm-stat-mini p-3.5 rounded-xl" style={{ background: C.blueSoft }}>
+              <div className="text-[19px] font-extrabold rm-num" style={{ color: C.blue }}>{e.attendanceRate ?? "—"}{e.attendanceRate != null && <span className="text-[12px]">%</span>}</div>
+              <div className="text-[11px] font-semibold" style={{ color: C.blue }}>Attendance</div>
+            </div>
+            <div className="rm-stat-mini p-3.5 rounded-xl" style={{ background: C.yellowSoft }}>
+              <div className="text-[19px] font-extrabold rm-num" style={{ color: C.amber }}>{e.leaves ?? 0}</div>
+              <div className="text-[11px] font-semibold" style={{ color: C.amber }}>Leave requests</div>
+            </div>
+          </div>
+          <DetailSection title="Employee">
+            <DetailRow label="Employee ID" value={e.name} />
+            <DetailRow label="Code / Username" value={e.employee_number || "—"} />
+            <DetailRow label="Designation" value={e.designation || "—"} />
+            <DetailRow label="Department" value={e.department || "—"} />
+            <DetailRow label="Branch" value={e.branch || "—"} />
+            <DetailRow label="Joined" value={e.date_of_joining || "—"} />
+            <DetailRow label="Status" value={<StatusBadge text={e.status || "Active"} />} />
+          </DetailSection>
+          <DetailSection title="Contact">
+            <DetailRow label="Mobile" value={e.cell_number || "—"} />
+            <DetailRow label="Company email" value={e.company_email || "—"} />
+            <DetailRow label="Personal email" value={e.personal_email || "—"} />
+          </DetailSection>
+        </>
+      )}
+    </Drawer>
+  );
+}
+
 function Staff({ d, reload }: Ctx) {
+  const [profileId, setProfileId] = useState<string | null>(null);
   const cols = ["Name", "School", "Designation", "Username", "Phone", "Status", "Verification", ""];
   const t = useTable(d.staff);
   const addFields: FieldDef[] = [
@@ -276,18 +389,129 @@ function Staff({ d, reload }: Ctx) {
         <Field label="Verification"><FilterSelect placeholder="All" options={["Verified", "Unverified"]} /></Field>
       </FilterBar>
       <DataTable cols={cols} t={t} render={(r) => (<>
-        <TableCell className="font-bold">{r[0]}</TableCell><TableCell>{r[1]}</TableCell><TableCell>{r[2]}</TableCell>
+        <TableCell>
+          <button className="rm-link font-bold text-left" onClick={() => setProfileId(String(r[6]))}>{r[0]}</button>
+        </TableCell>
+        <TableCell>{r[1]}</TableCell><TableCell>{r[2]}</TableCell>
         <TableCell>{r[3]}</TableCell><TableCell>{r[4]}</TableCell><TableCell><StatusBadge text={r[5]} /></TableCell>
         <TableCell><StatusBadge text="Verified" /></TableCell>
-        <TableCell><ViewAction cols={cols} row={r} /></TableCell>
+        <TableCell>
+          <button className="rm-icon-btn" title="Open profile" aria-label={`Open profile for ${r[0]}`}
+            onClick={() => setProfileId(String(r[6]))}><Eye size={16} color={C.mute} /></button>
+        </TableCell>
       </>)} />
+      <StaffProfileDrawer id={profileId} onClose={() => setProfileId(null)} />
     </div>
   );
 }
 
 /* ===================== STUDENTS ===================== */
+/* Student profile — identity, guardians, enrolment, fees, attendance (Phase 1) */
+function StudentProfileDrawer({ id, onClose }: { id: string | null; onClose: () => void }) {
+  const [p, setP] = useState<StudentProfile | null>(null);
+  const [ledger, setLedger] = useState<{ invoices: Row[]; payments: Row[] } | null>(null);
+  const [err, setErr] = useState("");
+
+  React.useEffect(() => {
+    if (!id) { setP(null); setLedger(null); setErr(""); return; }
+    let alive = true;
+    setP(null); setLedger(null); setErr("");
+    Promise.all([api.studentProfile(id), api.feeLedger(id)])
+      .then(([prof, led]) => { if (alive) { setP(prof); setLedger(led); } })
+      .catch((e) => alive && setErr(e?.message || "Could not load profile"));
+    return () => { alive = false; };
+  }, [id]);
+
+  const s = p?.student;
+  return (
+    <Drawer open={!!id} onClose={onClose}
+      title={s?.student_name || "Student"}
+      subtitle={s ? `${id} · ${stripRmips(s.branch || "")}` : id || ""}>
+      {err && <div className="p-3 rounded-lg text-[13px]" style={{ background: C.redSoft, color: C.red }}>{err}</div>}
+      {!p && !err && <div className="space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="rm-skel h-4 w-full" />)}</div>}
+      {p && (
+        <>
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="rm-stat-mini p-3.5 rounded-xl" style={{ background: C.blueSoft }}>
+              <div className="text-[19px] font-extrabold rm-num" style={{ color: C.blue }}>{p.attendance.rate ?? "—"}{p.attendance.rate != null && <span className="text-[12px]">%</span>}</div>
+              <div className="text-[11px] font-semibold" style={{ color: C.blue }}>Attendance</div>
+            </div>
+            <div className="rm-stat-mini p-3.5 rounded-xl" style={{ background: C.greenSoft }}>
+              <div className="text-[19px] font-extrabold rm-num" style={{ color: C.green }}>{compact(p.fees.collected)}</div>
+              <div className="text-[11px] font-semibold" style={{ color: C.green }}>Paid</div>
+            </div>
+            <div className="rm-stat-mini p-3.5 rounded-xl" style={{ background: C.redSoft }}>
+              <div className="text-[19px] font-extrabold rm-num" style={{ color: C.red }}>{compact(p.fees.pending)}</div>
+              <div className="text-[11px] font-semibold" style={{ color: C.red }}>Pending</div>
+            </div>
+          </div>
+
+          <DetailSection title="Student">
+            <DetailRow label="Admission No" value={s.name} />
+            <DetailRow label="Class" value={p.enrollment?.program || "—"} />
+            <DetailRow label="Academic Year" value={p.enrollment?.academic_year || "—"} />
+            <DetailRow label="Branch" value={s.branch || "—"} />
+            <DetailRow label="Mobile" value={s.student_mobile_number || "—"} />
+            <DetailRow label="Email" value={s.student_email_id || "—"} />
+            <DetailRow label="Joined" value={s.joining_date || "—"} />
+            <DetailRow label="Status" value={<StatusBadge text={s.enabled ? "Active" : "Inactive"} />} />
+          </DetailSection>
+
+          <DetailSection title={`Guardians (${p.guardians.length})`}>
+            {p.guardians.length === 0 && <div className="text-[12.5px]" style={{ color: C.mute }}>No guardians recorded.</div>}
+            {p.guardians.map((g) => (
+              <div key={g.guardian} className="flex items-center gap-3 py-2.5 border-b last:border-0" style={{ borderColor: "#f2f5fa" }}>
+                <div className="w-9 h-9 rounded-full grid place-items-center text-[12px] font-bold shrink-0"
+                  style={{ background: C.blueSoft, color: C.blue }}>{g.relation?.[0] || "G"}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13.5px] font-semibold truncate">{g.guardian_name}</div>
+                  <div className="text-[11.5px] truncate" style={{ color: C.mute }}>{g.relation} · {g.mobile || "no phone"}</div>
+                </div>
+              </div>
+            ))}
+          </DetailSection>
+
+          <DetailSection title={`Fee ledger (${ledger?.invoices.length ?? 0} invoices)`}>
+            {(ledger?.invoices || []).length === 0 && <div className="text-[12.5px]" style={{ color: C.mute }}>No invoices raised.</div>}
+            {(ledger?.invoices || []).map((r) => (
+              <div key={String(r[0])} className="flex items-center gap-3 py-2.5 border-b last:border-0" style={{ borderColor: "#f2f5fa" }}>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12.5px] font-semibold truncate">{String(r[0])}</div>
+                  <div className="text-[11.5px]" style={{ color: C.mute }}>{String(r[1])}</div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-[13px] font-extrabold rm-num">{inr(Number(r[2]))}</div>
+                  <div className="text-[11px] rm-num" style={{ color: Number(r[4]) > 0 ? C.red : C.green }}>
+                    {Number(r[4]) > 0 ? `${inr(Number(r[4]))} due` : "settled"}
+                  </div>
+                </div>
+                <StatusBadge text={String(r[5])} />
+              </div>
+            ))}
+          </DetailSection>
+
+          {(ledger?.payments || []).length > 0 && (
+            <DetailSection title="Payments received">
+              {(ledger?.payments || []).map((r, i) => (
+                <div key={i} className="flex items-center gap-3 py-2.5 border-b last:border-0" style={{ borderColor: "#f2f5fa" }}>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12.5px] font-semibold truncate">{String(r[0])}</div>
+                    <div className="text-[11.5px]" style={{ color: C.mute }}>{String(r[1])} · {String(r[2])}</div>
+                  </div>
+                  <div className="text-[13px] font-extrabold rm-num" style={{ color: C.green }}>{inr(Number(r[4]))}</div>
+                </div>
+              ))}
+            </DetailSection>
+          )}
+        </>
+      )}
+    </Drawer>
+  );
+}
+
 function Students({ d, reload }: Ctx) {
   const [tab, setTab] = useState("Student");
+  const [profileId, setProfileId] = useState<string | null>(null);
   const cols = ["Adm No", "Name", "School", "Class", "Phone", "Verification", ""];
   const t = useTable(d.students);
   const addFields: FieldDef[] = [
@@ -310,16 +534,21 @@ function Students({ d, reload }: Ctx) {
             <Field label="Class"><FilterSelect placeholder="All Classes" options={CLASSES} /></Field>
           </FilterBar>
           <DataTable cols={cols} t={t} render={(r) => (<>
-            <TableCell style={{ color: C.mute }}>{r[0]}</TableCell><TableCell className="font-bold">{r[1]}</TableCell>
+            <TableCell style={{ color: C.mute }}>{r[0]}</TableCell>
+            <TableCell>
+              <button className="rm-link font-bold text-left" onClick={() => setProfileId(String(r[0]))}>{r[1]}</button>
+            </TableCell>
             <TableCell>{r[2]}</TableCell><TableCell>{r[3]}</TableCell><TableCell>{r[4]}</TableCell>
             <TableCell><StatusBadge text={r[5] === "Active" ? "Verified" : "Unverified"} /></TableCell>
             <TableCell><div className="flex gap-3 items-center">
-              <ViewAction cols={cols} row={r} />
+              <button className="rm-icon-btn" title="Open profile" aria-label={`Open profile for ${r[1]}`}
+                onClick={() => setProfileId(String(r[0]))}><Eye size={16} color={C.mute} /></button>
               <DeleteAction doctype="Student" name={String(r[0])} remove={api.removeDoc} onDone={reload} />
             </div></TableCell>
           </>)} />
         </>
       ) : <Placeholder name={tab} note="Alumni records, transfers, admission-form fields & history." />}
+      <StudentProfileDrawer id={profileId} onClose={() => setProfileId(null)} />
     </div>
   );
 }

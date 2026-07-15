@@ -433,6 +433,147 @@ def rename_company(new_name="Rosemount International Preschool"):
         print("No 'Ayu's company'. Companies now: %s" % frappe.get_all("Company", pluck="name"))
 
 
+# --- Phase 1 support data -----------------------------------------------------
+# Guardians, an annual calendar and student attendance history. The dashboard's
+# student profile, events widget and attendance screens read these.
+
+GUARDIAN_RELATIONS = ["Father", "Mother"]
+
+# label, date, is a real school holiday (vs an event on the calendar)
+CALENDAR_2026 = [
+    ("Independence Day", "2026-08-15", 1),
+    ("Ganesh Chaturthi", "2026-09-14", 1),
+    ("Gandhi Jayanti", "2026-10-02", 1),
+    ("Dussehra", "2026-10-20", 1),
+    ("Diwali Break", "2026-11-08", 1),
+    ("Annual Sports Day", "2026-12-12", 0),
+    ("Christmas", "2026-12-25", 1),
+    ("Annual Day Function", "2027-01-16", 0),
+    ("Republic Day", "2027-01-26", 1),
+    ("Parent-Teacher Meeting", "2027-02-13", 0),
+    ("Holi", "2027-03-03", 1),
+]
+
+
+def _seed_guardians(students):
+    """One father + one mother per student, linked via Student.guardians."""
+    n = 0
+    for sname, sid in (students or {}).items():
+        try:
+            doc = frappe.get_doc("Student", sid)
+        except Exception:
+            continue
+        if doc.get("guardians"):
+            continue
+        surname = sname.split(" ")[-1] if " " in sname else sname
+        for rel in GUARDIAN_RELATIONS:
+            gname = "%s %s" % ("Mr." if rel == "Father" else "Mrs.", surname)
+            gid = frappe.db.exists("Guardian", {"guardian_name": gname})
+            if not gid:
+                slug = re.sub(r"[^a-z0-9]+", ".", gname.lower()).strip(".")
+                gid = frappe.get_doc({
+                    "doctype": "Guardian", "guardian_name": gname,
+                    "email_address": "%s@guardians.rosemount.local" % slug,
+                    "mobile_number": doc.get("student_mobile_number") or "",
+                    "occupation": "Self Employed" if rel == "Father" else "Homemaker",
+                }).insert(ignore_permissions=True).name
+            doc.append("guardians", {"guardian": gid, "guardian_name": gname, "relation": rel})
+            n += 1
+        doc.save(ignore_permissions=True)
+    _log("Guardians: %d linked (%d total)" % (n, frappe.db.count("Guardian")))
+
+
+def _seed_holidays():
+    """Annual calendar -> Holiday List. Powers the dashboard events widget.
+
+    Also set as the Company default — Student Attendance validates against the
+    company's holiday list and refuses to submit without one.
+    """
+    name = "Rosemount 2026-2027"
+    if not frappe.db.exists("Holiday List", name):
+        hl = frappe.get_doc({
+            "doctype": "Holiday List", "holiday_list_name": name,
+            "from_date": "2026-04-01", "to_date": "2027-03-31",
+        })
+        for label, date, _is_holiday in CALENDAR_2026:
+            hl.append("holidays", {"holiday_date": date, "description": label})
+        hl.insert(ignore_permissions=True)
+        _log("Holiday List: %s (%d entries)" % (name, len(CALENDAR_2026)))
+    if not frappe.db.get_value("Company", _company(), "default_holiday_list"):
+        frappe.db.set_value("Company", _company(), "default_holiday_list", name)
+        _log("Company default holiday list set -> %s" % name)
+
+
+def _seed_student_groups(students):
+    """One Student Group (class section) per program, holding its enrolled students.
+
+    Student Attendance requires a Student Group or Course Schedule, so these are a
+    prerequisite for attendance — and they are the 'class/section' dimension the
+    dashboard groups attendance by.
+    """
+    ay = "2026-2027"
+    by_program = {}
+    for pe in frappe.get_all("Program Enrollment", filters={"docstatus": 1},
+                             fields=["student", "program"]):
+        if pe.program:
+            by_program.setdefault(pe.program, []).append(pe.student)
+
+    groups = {}
+    for program, sids in by_program.items():
+        gname = "%s %s" % (program, ay)
+        gid = frappe.db.exists("Student Group", {"student_group_name": gname})
+        if not gid:
+            doc = frappe.get_doc({
+                "doctype": "Student Group", "student_group_name": gname,
+                "group_based_on": "Batch", "program": program, "academic_year": ay,
+            })
+            for i, sid in enumerate(sids):
+                doc.append("students", {
+                    "student": sid,
+                    "student_name": frappe.db.get_value("Student", sid, "student_name"),
+                    "group_roll_number": i + 1, "active": 1,
+                })
+            doc.insert(ignore_permissions=True)
+            gid = doc.name
+        for sid in sids:
+            groups[sid] = gid
+    _log("Student groups: %d (%d total)" % (len(by_program), frappe.db.count("Student Group")))
+    return groups
+
+
+def _seed_student_attendance(students, groups):
+    """Attendance for the last 10 school days so the attendance screen has history."""
+    from frappe.utils import add_days, getdate, today
+    ids = [s for s in (students or {}).values() if groups.get(s)]
+    if not ids:
+        _log("Student attendance: skipped (no student groups)")
+        return
+    n = 0
+    day = getdate(today())
+    marked = 0
+    while marked < 10:
+        if day.weekday() < 5:  # Mon–Fri only
+            for i, sid in enumerate(ids):
+                if frappe.db.exists("Student Attendance", {"student": sid, "date": day}):
+                    continue
+                # deterministic spread: mostly present, an occasional absentee
+                status = "Absent" if ((i + marked) % 11 == 0) else "Present"
+                try:
+                    d = frappe.get_doc({
+                        "doctype": "Student Attendance", "student": sid,
+                        "student_group": groups[sid], "date": day, "status": status,
+                    })
+                    d.insert(ignore_permissions=True)
+                    d.submit()
+                    n += 1
+                except Exception as e:
+                    _log("  StudentAttendance %s %s FAILED: %s" % (sid, day, e))
+                    return
+            marked += 1
+        day = add_days(day, -1)
+    _log("Student attendance: %d rows over %d school days" % (n, marked))
+
+
 def run():
     """Entry point. Idempotent — safe to re-run."""
     global LOG
@@ -443,6 +584,7 @@ def run():
     # Each step commits independently so a late failure never rolls back earlier
     # progress, and every step's errors surface in one run.
     students = {}
+    groups = {}
 
     def step(label, fn):
         try:
@@ -459,6 +601,10 @@ def run():
     step("staff", _seed_staff)
     step("attendance", _seed_attendance)
     step("students", lambda: students.update(_seed_students(cgroup, territory) or {}))
+    step("guardians", lambda: _seed_guardians(students))
+    step("holidays", _seed_holidays)
+    step("student_groups", lambda: groups.update(_seed_student_groups(students) or {}))
+    step("student_attendance", lambda: _seed_student_attendance(students, groups))
     step("fees", lambda: _seed_fees(students, cgroup, territory))
     step("kit_orders", lambda: _seed_kit_orders(cgroup, territory))
 

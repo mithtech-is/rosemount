@@ -46,6 +46,17 @@ export interface FeeOverview { total: number; collected: number; pending: number
 export interface Funnel { total: number; converted: number; dropped: number; followup: number; }
 export interface Attendance { present: number; absent: number; leave: number; total: number; }
 
+// ---- Phase 1 ----
+export interface StudentProfile {
+  student: Record<string, any>;
+  enrollment: { program: string; academic_year: string; enrollment_date: string } | null;
+  enrollmentHistory: any[];
+  guardians: { guardian: string; guardian_name: string; relation: string; mobile: string; email: string }[];
+  fees: { total: number; collected: number; pending: number };
+  attendance: { present: number; total: number; rate: number | null };
+}
+export interface StudentAttendanceToday { present: number; absent: number; total: number; rate: number; date: string | null; }
+
 export const api = {
   summary: (branch?: string) => call<Summary>("dashboard_summary", { branch }),
   feeOverview: (branch?: string) => call<FeeOverview>("fee_overview", { branch }),
@@ -80,6 +91,17 @@ export const api = {
   topicsList: () => call<Row[]>("topics_list"),
   hqUsers: () => call<Row[]>("hq_users"),
   clearCache: () => call("clear_cache"),
+
+  // ---- Phase 1: profiles, ledger, calendar, student attendance ----
+  studentProfile: (student: string) => call<StudentProfile>("student_profile", { student }),
+  feeLedger: (student: string) => call<{ invoices: Row[]; payments: Row[] }>("fee_ledger", { student }),
+  staffProfile: (employee: string) => call<Record<string, any>>("staff_profile", { employee }),
+  upcomingEvents: () => call<Row[]>("upcoming_events"),
+  studentAttendanceToday: (branch?: string) => call<StudentAttendanceToday>("student_attendance_today", { branch }),
+  studentAttendanceRows: (branch?: string, date?: string) =>
+    call<{ date: string | null; rows: Row[] }>("student_attendance_rows", { branch, date }),
+  attendanceTrend: (branch?: string) =>
+    call<{ d: string; rate: number; present: number; absent: number }[]>("attendance_trend", { branch }),
 
   // ---- writes (POST + CSRF) ----
   addBranch: (v: any) => post("add_branch", v),

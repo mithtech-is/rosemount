@@ -233,6 +233,64 @@ export function DataTable({ cols, t, render, exportName }:
   );
 }
 
+/* ---------------- Drawer (slide-over detail panel) ----------------
+   Used by the Students / Staff profile views. Closes on backdrop click and Esc,
+   traps nothing (read-only content), and never blocks the page when closed. */
+export function Drawer({ open, onClose, title, subtitle, children, footer }: {
+  open: boolean; onClose: () => void; title: string; subtitle?: string;
+  children: React.ReactNode; footer?: React.ReactNode;
+}) {
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="rm-drawer-root fixed inset-0 z-[1000]">
+      <div className="rm-drawer-scrim absolute inset-0" onClick={onClose} aria-hidden />
+      <aside
+        role="dialog" aria-modal="true" aria-label={title}
+        className="rm-drawer absolute top-0 right-0 h-full w-[520px] max-w-[92vw] bg-white flex flex-col"
+      >
+        <header className="px-6 py-5 flex items-start gap-3 border-b" style={{ borderColor: "#eef1f7" }}>
+          <div className="min-w-0 flex-1">
+            <h2 className="m-0 text-[19px] font-extrabold truncate" style={{ color: C.ink }}>{title}</h2>
+            {subtitle && <div className="text-[12.5px] mt-0.5 truncate" style={{ color: C.mute }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} aria-label="Close"
+            className="rm-drawer-x w-9 h-9 rounded-full grid place-items-center shrink-0"
+            style={{ color: C.mute }}>✕</button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+        {footer && <footer className="px-6 py-4 border-t" style={{ borderColor: "#eef1f7" }}>{footer}</footer>}
+      </aside>
+    </div>
+  );
+}
+
+/* Label/value pair used inside the Drawer */
+export function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-3 py-2">
+      <div className="text-[12px] w-[124px] shrink-0" style={{ color: C.mute }}>{label}</div>
+      <div className="text-[13.5px] font-semibold min-w-0 break-words">{value ?? "—"}</div>
+    </div>
+  );
+}
+
+/* Section heading inside the Drawer */
+export function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-6">
+      <div className="rm-eyebrow text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: C.mute }}>{title}</div>
+      {children}
+    </section>
+  );
+}
+
 export function Placeholder({ name, note }: { name: string; note: string }) {
   return (
     <Card className="rounded-2xl py-14 px-6 text-center">
